@@ -192,10 +192,9 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
         )
 
 
-# Ask Question Endpoint - GET with streaming SSE and conversation history
 @app.get("/ask")
 async def ask_legal_question(question: str, format: str = "detailed", conversation_history: str = "[]", db: Session = Depends(get_db)):
-    """Ask a legal question and stream the answer word-by-word via SSE with conversation context"""
+    """Ask a legal question with conversation context"""
     
     user_question = question
     response_format = format
@@ -247,30 +246,29 @@ Keep it professional and accurate."""
                 "content": system_prompt
             }
         ]
-
-        # Add previous conversation history for context
+        
+        # Add conversation history for context
         if conversation_history and conversation_history != "[]":
             try:
                 history = json.loads(conversation_history)
-                # Add only last 6 messages to keep context reasonable
-                for msg in history[-6:]:
-                    messages.append({
-                        "role": msg.get("role"),
-                        "content": msg.get("content")
-                    })
-            except:
-                pass
-
+                # Keep last 4 messages for context
+                for msg in history[-2:]:
+                    if isinstance(msg, dict) and msg.get("role") and msg.get("content"):
+                        messages.append({
+                            "role": msg.get("role"),
+                            "content": msg.get("content")
+                        })
+            except Exception as e:
+                print(f"Error parsing conversation history: {e}")
+        
         # Add current question
         messages.append({
             "role": "user",
             "content": user_question
         })
         
-        # Function to generate streaming response
         def generate():
             try:
-                # Call Groq API with streaming
                 response = requests.post(
                     GROQ_URL,
                     headers={
@@ -289,7 +287,6 @@ Keep it professional and accurate."""
                 )
                 
                 if response.status_code == 200:
-                    # Stream each word from Groq
                     for line in response.iter_lines():
                         if line:
                             line = line.decode('utf-8')
@@ -303,12 +300,10 @@ Keep it professional and accurate."""
                                     delta = chunk['choices'][0].get('delta', {})
                                     if 'content' in delta:
                                         word = delta['content']
-                                        # Send word as SSE event
                                         yield f"data: {json.dumps({'word': word})}\n\n"
                             except:
                                 pass
                     
-                    # Send completion signal
                     yield f"data: {json.dumps({'done': True})}\n\n"
                 else:
                     yield f"data: {json.dumps({'error': f'Groq API error: {response.status_code}'})}\n\n"
@@ -324,7 +319,6 @@ Keep it professional and accurate."""
         return {"error": f"Error: {str(e)}", "success": False}
 
 
-# Save conversation endpoint
 @app.post("/conversations/save")
 async def save_conversation(request: SaveConversationRequest, db: Session = Depends(get_db)):
     """Save or update a conversation"""
@@ -371,7 +365,6 @@ async def save_conversation(request: SaveConversationRequest, db: Session = Depe
         }
 
 
-# Get conversations endpoint
 @app.get("/conversations/{user_id}")
 async def get_conversations(user_id: int, db: Session = Depends(get_db)):
     """Get all conversations for a user"""
@@ -417,16 +410,13 @@ async def get_conversations(user_id: int, db: Session = Depends(get_db)):
         }
 
 
-# Delete conversation endpoint
 @app.delete("/conversations/{conversation_id}")
 async def delete_conversation(conversation_id: str, db: Session = Depends(get_db)):
     """Delete a conversation and all its messages"""
     try:
-        # Delete all messages for this conversation
         db.query(Message).filter(Message.conversation_id == conversation_id).delete()
         db.commit()
         
-        # Delete the conversation
         db.query(Conversation).filter(
             Conversation.id == conversation_id
         ).delete()
@@ -446,7 +436,6 @@ async def delete_conversation(conversation_id: str, db: Session = Depends(get_db
         }
 
 
-# Health check endpoints
 @app.get("/")
 async def root():
     """Test endpoint"""

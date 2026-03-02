@@ -54,6 +54,7 @@ class GoogleAuthRequest(BaseModel):
 class AskRequest(BaseModel):
     question: str
     format: str = "detailed"
+    conversation_history: list = []
 
 class SaveConversationRequest(BaseModel):
     conversation_id: str
@@ -191,10 +192,10 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
         )
 
 
-# Ask Question Endpoint - GET with streaming SSE
+# Ask Question Endpoint - GET with streaming SSE and conversation history
 @app.get("/ask")
-async def ask_legal_question(question: str, format: str = "detailed", db: Session = Depends(get_db)):
-    """Ask a legal question and stream the answer word-by-word via SSE"""
+async def ask_legal_question(question: str, format: str = "detailed", conversation_history: str = "[]", db: Session = Depends(get_db)):
+    """Ask a legal question and stream the answer word-by-word via SSE with conversation context"""
     
     user_question = question
     response_format = format
@@ -244,12 +245,27 @@ Keep it professional and accurate."""
             {
                 "role": "system",
                 "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_question
             }
         ]
+
+        # Add previous conversation history for context
+        if conversation_history and conversation_history != "[]":
+            try:
+                history = json.loads(conversation_history)
+                # Add only last 6 messages to keep context reasonable
+                for msg in history[-6:]:
+                    messages.append({
+                        "role": msg.get("role"),
+                        "content": msg.get("content")
+                    })
+            except:
+                pass
+
+        # Add current question
+        messages.append({
+            "role": "user",
+            "content": user_question
+        })
         
         # Function to generate streaming response
         def generate():

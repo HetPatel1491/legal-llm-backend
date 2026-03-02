@@ -192,9 +192,11 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
         )
 
 
-@app.get("/ask")
-async def ask_legal_question(question: str, format: str = "detailed", conversation_history: str = "[]", db: Session = Depends(get_db)):
-    """Ask a legal question with conversation context"""
+@app.post("/ask")
+async def ask_legal_question(request: AskRequest, db: Session = Depends(get_db)):
+    question = request.question
+    format = request.format
+    conversation_history = request.conversation_history
     
     user_question = question
     response_format = format

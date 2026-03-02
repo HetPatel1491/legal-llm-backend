@@ -194,12 +194,11 @@ async def google_auth(request: GoogleAuthRequest, db: Session = Depends(get_db))
 
 @app.post("/ask")
 async def ask_legal_question(request: AskRequest, db: Session = Depends(get_db)):
-    question = request.question
-    format = request.format
-    conversation_history = request.conversation_history
+    """Ask a legal question with full conversation context - remembers all previous messages in chat"""
     
-    user_question = question
-    response_format = format
+    user_question = request.question
+    response_format = request.format
+    conversation_history = request.conversation_history if request.conversation_history else []
     
     if not user_question:
         return {"error": "No question provided", "success": False}
@@ -220,16 +219,16 @@ async def ask_legal_question(request: AskRequest, db: Session = Depends(get_db))
 
 **Important Notes:** Add any important disclaimers, variations by jurisdiction, or special considerations.
 
-Be accurate, helpful, and practical in your legal explanations.""",
+Be accurate, helpful, and practical in your legal explanations. Remember the context of the conversation and build upon previous answers.""",
 
             "bullets": """You are a legal assistant. Answer the question ONLY using bullet points. Each bullet should be concise and clear. Include:
 - Key definition
 - Main points (3-5 bullets)
 - Important notes
 
-Keep it brief and scannable.""",
+Keep it brief and scannable. Remember what was discussed before in this conversation.""",
 
-            "simple": """You are a legal assistant. Answer the question in ONE paragraph only (3-4 sentences). Be concise and clear. Skip examples and detailed explanations. Just the essential information.""",
+            "simple": """You are a legal assistant. Answer the question in ONE paragraph only (3-4 sentences). Be concise and clear. Skip examples and detailed explanations. Just the essential information. Remember the context of this conversation.""",
 
             "qa": """You are a legal assistant. Format your answer as Q&A:
 
@@ -237,11 +236,12 @@ Q: [Restate the user's question]
 
 A: [Provide a clear, comprehensive answer in 2-3 paragraphs]
 
-Keep it professional and accurate."""
+Keep it professional and accurate. Remember what we discussed before."""
         }
         
         system_prompt = system_prompts.get(response_format, system_prompts["detailed"])
         
+        # Build messages array with conversation history
         messages = [
             {
                 "role": "system",
@@ -249,19 +249,14 @@ Keep it professional and accurate."""
             }
         ]
         
-        # Add conversation history for context
-        if conversation_history and conversation_history != "[]":
-            try:
-                history = json.loads(conversation_history)
-                # Keep last 4 messages for context
-                for msg in history[-2:]:
-                    if isinstance(msg, dict) and msg.get("role") and msg.get("content"):
-                        messages.append({
-                            "role": msg.get("role"),
-                            "content": msg.get("content")
-                        })
-            except Exception as e:
-                print(f"Error parsing conversation history: {e}")
+        # Add ALL conversation history (this is key for memory!)
+        if conversation_history and len(conversation_history) > 0:
+            for msg in conversation_history:
+                if isinstance(msg, dict) and msg.get("role") and msg.get("content"):
+                    messages.append({
+                        "role": msg.get("role"),
+                        "content": msg.get("content")
+                    })
         
         # Add current question
         messages.append({
@@ -269,8 +264,11 @@ Keep it professional and accurate."""
             "content": user_question
         })
         
+        print(f"DEBUG: Sending {len(messages)} messages to Groq (including system prompt and history)")
+        
         def generate():
             try:
+                # Call Groq API with streaming
                 response = requests.post(
                     GROQ_URL,
                     headers={
@@ -289,6 +287,7 @@ Keep it professional and accurate."""
                 )
                 
                 if response.status_code == 200:
+                    # Stream each token from Groq
                     for line in response.iter_lines():
                         if line:
                             line = line.decode('utf-8')
@@ -306,18 +305,26 @@ Keep it professional and accurate."""
                             except:
                                 pass
                     
+                    # Send completion signal
                     yield f"data: {json.dumps({'done': True})}\n\n"
                 else:
-                    yield f"data: {json.dumps({'error': f'Groq API error: {response.status_code}'})}\n\n"
+                    error_msg = f"Groq API error: {response.status_code}"
+                    print(f"ERROR: {error_msg}")
+                    yield f"data: {json.dumps({'error': error_msg})}\n\n"
                     
             except requests.exceptions.Timeout:
-                yield f"data: {json.dumps({'error': 'Request timed out'})}\n\n"
+                error_msg = "Request timed out"
+                print(f"ERROR: {error_msg}")
+                yield f"data: {json.dumps({'error': error_msg})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                error_msg = str(e)
+                print(f"ERROR: {error_msg}")
+                yield f"data: {json.dumps({'error': error_msg})}\n\n"
         
         return StreamingResponse(generate(), media_type="text/event-stream")
     
     except Exception as e:
+        print(f"MAIN ERROR: {str(e)}")
         return {"error": f"Error: {str(e)}", "success": False}
 
 
